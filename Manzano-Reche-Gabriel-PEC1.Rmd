@@ -1,0 +1,167 @@
+---
+title: "PEC 1"
+author: "Gabriel Manzano Reche"
+date: '*`r format(Sys.Date(),"%d de %B de %Y")`*'
+lan: "es"
+output:
+  html_document:
+    toc: true
+  pdf_document:
+    toc: true
+---
+
+\pagebreak
+
+# 1. Carga y Preparación de los Datos
+
+```{r}
+# Instalar Bioconductor si aún no está instalado
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+# Instalar paquetes necesarios
+BiocManager::install(c("fobitools", "POMA", "metabolomicsWorkbenchR", "SummarizedExperiment"))
+
+# Otros paquetes de CRAN
+install.packages(c("tidyverse", "rvest", "ggrepel", "kableExtra"))
+
+```
+
+```{r}
+# Paquete fobitools para conversión de IDs y análisis de enriquecimiento
+library(fobitools)
+
+# Otros paquetes necesarios
+library(tidyverse)
+library(rvest)
+library(ggrepel)
+library(kableExtra)
+library(POMA)
+library(metabolomicsWorkbenchR)
+library(SummarizedExperiment)
+```
+
+
+Los datos se cargarán usando la librería metabolomicsWorkbenchR.
+
+
+```{r}
+# Descargar datos en modo negativo
+data_negative_mode <- do_query(
+  context = "study",
+  input_item = "analysis_id",
+  input_value = "AN000465",
+  output_item = "SummarizedExperiment"
+)
+
+# Descargar datos en modo positivo
+data_positive_mode <- do_query(
+  context = "study",
+  input_item = "analysis_id",
+  input_value = "AN000464",
+  output_item = "SummarizedExperiment"
+)
+```
+
+
+```{r}
+# Mostrar data_negative_mode
+data_negative_mode
+```
+
+```{r}
+# Mostrar data_positive_mode
+data_positive_mode
+```
+Como se puede apreciar, tanto el dataset data_negative_mode como el data_positive_mode ya tienen el formato SummarizedExperiment por lo que a continuación, se combinarán ambos conjuntos en un único objeto SummarizedData y se le agregará la información del experimento en metadata.
+
+
+```{r}
+# URL de la página que contiene los identificadores de los metabolitos
+metaboliteNamesURL <- "https://www.metabolomicsworkbench.org/data/show_metabolites_by_study.php?STUDY_ID=ST000291&SEARCH_TYPE=KNOWN&STUDY_TYPE=MS&RESULT_TYPE=1"
+
+# Leer el contenido HTML de la página y seleccionar elementos de tabla con la clase .datatable
+metaboliteNames <- metaboliteNamesURL %>% 
+  read_html() %>%                   
+  html_nodes(".datatable")          
+
+# Extraer y procesar la tabla de metabolitos negativos
+metaboliteNames_negative <- metaboliteNames %>%
+  .[[1]] %>%                        
+  html_table() %>%                   
+  dplyr::select(`Metabolite Name`, PubChemCompound_ID, `Kegg Id`) 
+
+# Extraer y procesar la tabla de metabolitos positivos
+metaboliteNames_positive <- metaboliteNames %>%
+  .[[2]] %>%                         
+  html_table() %>%                   
+  dplyr::select(`Metabolite Name`, PubChemCompound_ID, `Kegg Id`)  
+
+# Combinar las tablas y eliminar duplicados
+metaboliteNames <- bind_rows(metaboliteNames_negative, metaboliteNames_positive) %>%
+  dplyr::rename(names = 1, PubChem = 2, KEGG = 3) %>%
+  mutate(KEGG = ifelse(KEGG == "-", "UNKNOWN", KEGG),
+         PubChem = ifelse(PubChem == "-", "UNKNOWN", PubChem)) %>%
+  filter(!duplicated(PubChem))
+```
+
+
+```{r}
+# Preparación de las características en modo negativo
+features_negative <- assay(data_negative_mode) %>% 
+  dplyr::slice(-n())  
+rownames(features_negative) <- rowData(data_negative_mode)$metabolite[1:(length(rowData(data_negative_mode)$metabolite)-1)]
+
+
+# Preparación de las características (features) en modo positivo
+features_positive <- assay(data_positive_mode) %>%  
+  dplyr::slice(-n()) 
+rownames(features_positive) <- rowData(data_positive_mode)$metabolite[1:(length(rowData(data_positive_mode)$metabolite)-1)]
+
+
+# Combinar características de modo positivo y negativo, y asignar los IDs de PubChem
+features <- bind_rows(features_negative, features_positive) %>% 
+  tibble::rownames_to_column("names") %>%  
+  right_join(metaboliteNames, by = "names") %>%
+  select(-names, -KEGG) %>% 
+  tibble::column_to_rownames("PubChem")  
+
+# Preparación de los metadatos de las muestras
+pdata <- colData(data_negative_mode) %>%  
+  as.data.frame() %>% 
+  tibble::rownames_to_column("ID") %>% 
+  mutate(Treatment = case_when(Treatment == "Baseline urine" ~ "Baseline",  
+                               Treatment == "Urine after drinking apple juice" ~ "Apple",
+                               Treatment == "Urine after drinking cranberry juice" ~ "Cranberry"))
+```
+
+
+
+
+```{r}
+common_metabolites <- intersect(rownames(features_negative), rownames(features_positive))
+# Filtrar features_negative y features_positive para mantener solo los metabolitos comunes
+features_negative <- features_negative[common_metabolites, ]
+features_positive <- features_positive[common_metabolites, ]
+# Crear el objeto SummarizedExperiment combinado
+combined_data <- SummarizedExperiment(
+  assays = list(
+    negative_mode = features_negative,  # Datos en modo negativo
+    positive_mode = features_positive   # Datos en modo positivo
+  ),
+  colData = pdata,                      # Metadatos de las muestras
+  rowData = rowData(data_negative_mode) # Información de los metabolitos (nombres e IDs)
+)
+
+# Agregar la información del experimento a metadata
+metadata(combined_data)$experimentData <- MIAME(
+  title = "LC-MS Based Approaches to Investigate Metabolomic Differences in the Urine of Young Women after Drinking Cranberry Juice or Apple Juice",
+  lab = "Duke University",
+  name = "Pol Castellano-Escuder",
+  url = "https://www.metabolomicsworkbench.org/data/DRCCMetadata.php?Mode=Study&StudyID=ST000291"
+)
+
+# Mostrar el objeto combinado
+combined_data
+
+```
