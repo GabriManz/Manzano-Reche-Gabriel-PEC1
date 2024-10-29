@@ -1,0 +1,93 @@
+# Librerías
+library(ggplot2)
+library(SummarizedExperiment)
+library(readxl)
+library(tidyverse)
+
+# Carga de los datos de la hoja 1
+original_data <- read_excel("TIO2+PTYR-human-MSS+MSIvsPD.XLSX")
+head(original_data)
+
+# Nombres de las columnas
+colnames(original_data)
+
+# Carga de los datos de la hoja 2
+targets <- read_excel("TIO2+PTYR-human-MSS+MSIvsPD.XLSX", sheet = 2)
+head(targets)
+
+# Seleccionar las columnas de abundancia y almacenarlas en una variable
+abundancias <- original_data %>% select(5:16)
+abundancias <- as.data.frame(abundancias)
+
+# Asignarle nuevos nombres a las filas de la matriz de abundancia
+accesion_rownames <- make.names(original_data$Accession, unique = TRUE)
+rownames(abundancias) <- accesion_rownames
+head(abundancias)
+
+# Crear el DataFrame de metadatos de las muestras
+sample_info <- DataFrame(
+  SampleID = colnames(abundancias),
+  Group = c(rep("MSS", 6), rep("PD", 6)),
+  Replicate = rep(c(1, 2), times = 6)
+)
+
+# Crear el DataFrame con metadatos de los fosfopéptidos
+row_data <- DataFrame(
+  SequenceModifications = original_data$SequenceModifications,
+  Description = original_data$Description,
+  row.names = rownames(abundancias)
+)
+
+# Crear el objeto SummarizedExperiment
+se <- SummarizedExperiment(
+  assays = list(counts = as.matrix(abundancias)),  # Matriz de abundancia
+  colData = sample_info,  # Metadata de las muestras
+  rowData = row_data  # Metadata de los fosfopéptidos
+)
+
+# Resumen estadístico de la matriz de abundancia
+summary(assay(se, "counts"))
+
+# Convertir los datos de abundancia a formato largo
+abundances_long <- abundancias %>% 
+  pivot_longer(cols = everything(), names_to = "Muestra", values_to = "Abundancia")
+
+# Crear el histograma para cada muestra
+ggplot(abundances_long, aes(x = Abundancia)) +
+  geom_histogram(bins = 20, fill = "red", color = "black") +
+  facet_wrap(~ Muestra, scales = "free_x") +  # Crear un gráfico por cada muestra
+  labs(title = "Distribución de abundancias en cada muestra",
+       x = "Abundancia",
+       y = "Frecuencia") +
+  theme_minimal()
+
+# Visualizar distribuciones de abundancia en escala logarítmica
+boxplot(log10(assay(se, "counts") + 1), 
+        main = "Distribución de abundancias en escala log10",
+        xlab = "Muestras",
+        ylab = "Log10(Abundancia + 1)",
+        las = 2,  
+        col = "lightblue",  
+        border = "darkblue")  
+
+# Análisis de Componentes Principales
+source("https://raw.githubusercontent.com/uebvhir/UEB_PCA/master/UEB_plotPCA3.R")
+plotPCA3(datos=as.matrix(log10(abundancias+1)), labels=colnames(abundancias), 
+         factor=targets$Phenotype, title ="Phosphoproteomic data",
+         scale=FALSE, colores=1:2, size = 3.5, glineas = 2.5)
+
+# Guardar el objeto SummarizedExperiment como .RDS
+saveRDS(se, file = "summarized_data/summarized_experiment.rds")
+
+# Guardar el objeto en formato .RData
+save(se, file = "summarized_data/summarized_experiment.RData")
+
+# Guardar los datos en forma de texto
+# Exportar la matriz de datos de abundancia
+write.csv(as.data.frame(assay(se, "counts")), "datos_texto/abundances.csv", row.names = TRUE)
+
+# Exportar los metadatos de las muestras
+write.csv(as.data.frame(colData(se)), "datos_texto/sample_info.csv", row.names = TRUE)
+
+# Exportar los metadatos de los fosfopéptidos
+write.csv(as.data.frame(rowData(se)), "datos_texto/row_info.csv", row.names = TRUE)

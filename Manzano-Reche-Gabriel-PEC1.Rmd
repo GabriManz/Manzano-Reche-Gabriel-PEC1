@@ -1,5 +1,5 @@
 ---
-title: "PEC 1"
+title: "PEC 1: Informe de Análisis Metabolómico de orina en mujeres después de beber zumo de arándano o manzana"
 author: "Gabriel Manzano Reche"
 date: '*`r format(Sys.Date(),"%d de %B de %Y")`*'
 lan: "es"
@@ -12,156 +12,416 @@ output:
 
 \pagebreak
 
-# 1. Carga y Preparación de los Datos
+# 1. Introducción 
+
+Para esta PEC1 se ha escogido el dataset propuesto llamado **2018-Phosphoproteomics**. 
+
+Los daros de este estudio se han obtenido a partir de un experimento de fosfoproteómica. El experimento ha analizado (3 + 3) modelos PDX de dos subtipos diferentes utilizando muestras enriquecidas en fosfopéptidos. Se realizó un análisis LC-MS con 2 réplicas técnicas para cada muestra. El conjunto de resultados consiste en abundancias normalizadas de señales MS para aproximadamente 1400 fosfopéptidos. El objetivo del análisis es identificar fosfopéptidos que permitan diferenciar los dos grupos de tumores. Esto debe realizarse mediante análisis estadístico y visualización. Los datos se han proporcionado en un archivo de Excel: TIO2+PTYR-human-MSS+MSIvsPD.XLSX.
+
+Los grupos están definidos como:
+
+-   Grupo MSS: Muestras M1, M5 y T49
+-   Grupo PD: Muestras M42, M43 y M64
+
+Cada muestra cuenta con dos réplicas técnicas. La primera columna, SequenceModification, contiene los valores de abundancia para los distintos fosfopéptidos. Las demás columnas pueden omitirse.
+
+## Objetivos del Estudio
+
+-   Identificar diferencias entre los dos subtipos (MSS y PD)
+-   Explorar patrones de fosforilación en cada subtipo
+-   Observar si existe variabilidad entre réplicas
+
+## Limitaciones del estudio
+
+-   Tamaño de muestra reducido. Sólo se disponen de tres muestras con dos réplicas cada una para cada subtipo.
+-   La propia limitación de la técnica LC-MS: esta técnica puede no capturar todos los fosfopéptidos presentes.
+-   Los modelos PDX pueden presentan variabilidad biológica, lo que puede influir en los resultados.
+
+
+# 2. Carga de los datos
 
 ```{r}
-# Instalar Bioconductor si aún no está instalado
-if (!requireNamespace("BiocManager", quietly = TRUE))
-    install.packages("BiocManager")
+if (!(require(limma))){
+  source("http://bioconductor.org/biocLite.R")
+  biocLite("limma")
+}
 
-# Instalar paquetes necesarios
-BiocManager::install(c("fobitools", "POMA", "metabolomicsWorkbenchR", "SummarizedExperiment"))
-
-# Otros paquetes de CRAN
-install.packages(c("tidyverse", "rvest", "ggrepel", "kableExtra"))
-
-```
-
-```{r}
-# Paquete fobitools para conversión de IDs y análisis de enriquecimiento
-library(fobitools)
-
-# Otros paquetes necesarios
-library(tidyverse)
-library(rvest)
-library(ggrepel)
-library(kableExtra)
-library(POMA)
-library(metabolomicsWorkbenchR)
 library(SummarizedExperiment)
+library(readxl)
+library(tidyverse)
+```
+
+```{r}
+# Carga de los datos de la hoja 1
+original_data <- read_excel("TIO2+PTYR-human-MSS+MSIvsPD.XLSX")
+head(original_data)
+```
+
+```{r}
+# Carga de los datos de la hoja 1
+targets <- read_excel("TIO2+PTYR-human-MSS+MSIvsPD.XLSX", sheet = 2)
+head(targets)
 ```
 
 
-Los datos se cargarán usando la librería metabolomicsWorkbenchR.
+
+```{r}
+# Nombres de las columnas
+colnames(original_data)
+```
+Como se puede ver de la columna 5 a la 16, se encuentran las abundancias. Estás se almacenarán en un nuevo dataframe llamado abundancias y se le asignarán el nombre de los fosfopéptidos a las filas, los cuales se encuentran en la columna Accesion. Por otro lado, en la columna SequenceModifications y Description se observa metadata, la cual se incluirá en el objeto *SummarizeData*.
+
+
+# 3. Seleccionar columna de metadatos y datos
+
+```{r}
+# Seleccionar las columnas de abundancia y almacenarlas en una variable
+abundancias <- original_data %>% select(5:16)
+abundancias <- as.data.frame(abundancias)
+
+# Asignarle nuevos nombres a las columnas de la matriz de abundancia
+accesion_rownames <- make.names(original_data$Accession, unique = TRUE)
+rownames(abundancias) <- accesion_rownames
+head(abundancias)
+```
+
+A continuación se definen los metadatos, que incluyen información de las muestras como grupo y réplica, y detalles de los fosfopéptidos como modificaciones de secuencia y descripción.
+
+En primer lugar, se definen los metadatos de las muestras que se almacenarán en la variable sample_info. Esta variable contiene el SampleID de cada muestra, el grupo y el número de réplica.
+
+```{r}
+# Crear el DataFrame de metadatos de las muestras
+sample_info <- DataFrame(
+    SampleID = colnames(abundancias),
+    Group = c(rep("MSS", 6), rep("PD", 6)),
+    Replicate = rep(c(1, 2), times = 6)
+)
+```
+
+
+A continuación se definen los metadatos de los fosfopéptidos, una descripción de estos y la modificacion en su secuencia.
 
 
 ```{r}
-# Descargar datos en modo negativo
-data_negative_mode <- do_query(
-  context = "study",
-  input_item = "analysis_id",
-  input_value = "AN000465",
-  output_item = "SummarizedExperiment"
+# Crear el DataFrame con metadatos de los fosfopéptidos
+row_data <- DataFrame(
+    SequenceModifications = original_data$SequenceModifications,
+    Description = original_data$Description,
+    row.names = rownames(abundancias)
+)
+```
+
+
+
+# 3. Crear y explorar el objeto *SummarizedData*
+
+
+Finalmente, se crea el objeto *SummarizedData* que permite organizar la matriz de abundancia junto con los metadatos en un solo objeto, facilitando el análisis de los datos.
+
+```{r}
+# Crear el objeto SummarizedExperiment
+se <- SummarizedExperiment(
+    assays = list(counts = as.matrix(abundancias)),  # Matriz de abundancia
+    colData = sample_info,  # Metadata de las muestras
+    rowData = row_data  # Metadata de los fosfopéptidos
 )
 
-# Descargar datos en modo positivo
-data_positive_mode <- do_query(
-  context = "study",
-  input_item = "analysis_id",
-  input_value = "AN000464",
-  output_item = "SummarizedExperiment"
+se
+```
+# 4. Análisis de los datos
+
+A continuación, se procederá al análisis de los datos con el objetivo de identificar diferencias significativas entre los dos subtipos de muestras presentes en el experimento.
+
+
+```{r}
+# Resumen estadístico de la matriz de abundancia
+summary(assay(se, "counts"))
+```
+
+
+```{r}
+# Convertir los datos de abundancia a formato largo
+abundancias_long <- abundancias %>% 
+  pivot_longer(cols = everything(), names_to = "Muestra", values_to = "Abundancia")
+
+# Crear el histograma para cada muestra
+ggplot(abundancias_long, aes(x = Abundancia)) +
+  geom_histogram(bins = 20, fill = "red", color = "black") +
+  facet_wrap(~ Muestra, scales = "free_x") +  # Crear un gráfico por cada muestra
+  labs(title = "Distribución de abundancias en cada muestra",
+       x = "Abundancia",
+       y = "Frecuencia") +
+  theme_minimal()
+```
+
+Como se puede apreciar en los histogramas de arriba, todas las muestras están sesgadas hacia la izquierda. Esto sugiere que puede ser útil normalizar los datos (aplicando log10) para visualizar mejor las diferencias entre las muestras. A continuación se viualizarán las datos normalizados en base 10
+
+
+
+```{r}
+# Visualizar distribuciones de abundancia en escala logarítmica
+boxplot(log10(assay(se, "counts") + 1), 
+        main = "Distribución de abundancias en escala log10",
+        xlab = "Muestras",
+        ylab = "Log10(Abundancia + 1)",
+        las = 2,  # Gira las etiquetas del eje x para facilitar la lectura
+        col = "lightblue",  # Color de las cajas
+        border = "darkblue")  # Color del borde
+
+```
+
+En este gráfico se puede observar la distribución de las abundacias de péptidos en las muestras en escala logarítmica, donde no se observa una separación clara entre las muestras de los grupos MSS y PD.
+
+
+A continuación, se normalizarán los datos de la matriz de abundancias y se extraerá el grupo y réplica a la que pertenece cada muestra, con el objetivo de identificar diferencias significativas entre grupos o entre réplicas. 
+
+```{r}
+# Extraer la matriz de abundancia del objeto SummarizedExperiment
+abundancias <- assay(se, "counts")
+
+# Convertir la matriz de abundancia a formato largo y aplicar transformación logarítmica
+logDat <- as.data.frame(abundancias) %>%
+  pivot_longer(cols = everything(), names_to = "Muestra", values_to = "Abundancia") %>%
+  mutate(log_abundance = log10(Abundancia + 1))
+
+# Extraer información de Grupo y Réplica desde el nombre de la muestra
+covs <- str_split(logDat$Muestra, "_", simplify = TRUE)
+colnames(covs) <- c("Sample", "Replicate", "Group")
+
+# Añadir las nuevas columnas (Sample, Replicate, Group) al dataframe logDat
+logDat2 <- cbind(logDat, covs)
+
+# Verificar la estructura de los datos transformados
+head(logDat2)
+```
+
+
+```{r}
+# Crear el boxplot con ggplot2 usando el grupo y la réplica como variables estéticas
+ggplot(logDat2, aes(x = Muestra, y = log_abundance, fill = Group, colour = Replicate)) + 
+  geom_boxplot() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = "Distribución de abundancias de fosfopéptidos (escala log10)",
+       x = "Muestras",
+       y = "Log10(Abundancia + 1)")
+```
+
+
+Este gráfico muestra la distribución de abundacias de fosfopéptidos en escala logarítmo para cada muestra, representando también el grupo y la réplica a la que pertenece esa muestra. No se aprecia diferencia significativa entre los grupos ni entre las réplicas.
+
+
+
+## Análisis de Componentes Principales
+
+A continuación, se procederá a aplicar sobre la matriz de abundancia el análisis de componentes principales. Esto permitirá reducir la dimensionalidad del dataset (se disponen de cientos de cientos de variables) y permitirá además identificar patrones o diferencias entre los grupos.
+
+```{r}
+# Análisis de Componentes Principales
+source("https://raw.githubusercontent.com/uebvhir/UEB_PCA/master/UEB_plotPCA3.R")
+plotPCA3(datos=as.matrix(log10(abundancias+1)), labels=colnames(abundancias), 
+         factor=targets$Phenotype, title ="Phosphoproteomic data",
+         scale=FALSE, colores=1:2, size = 3.5, glineas = 2.5)
+```
+
+Este gráfico muestra el resultado de aplicar el análisis de componentes principales sobre los datos. En el eje X se representa la componente principal 1 y en el eje y la componente principal 2.
+
+Se puede apreciar una clara separación entre los grupos MSS y PD, lo que indica que estos dos grupos presentan diferencias significativas, las cuales no se habían podido apreciar en los análisis anteriores. Además, también se puede ver que mientras las muestras el grupo MSS permanecen agrupadas, las muestras del grupo PD están muy dispersas, lo que indica heterogeneidad en el grupo.
+
+
+# 5. Análisis Estadístico
+
+Se usará el paquete *Lima* para llevar a cabo un análisis de expresión diferencial.
+
+Para ello, en primer ligar se crea la matriz de diseño, en la que a cada muestra se le aplica un 1 y un 0, dependiendo de si está presente o no en los grupos definidos.
+
+```{r}
+# Convertir el archivo de targets a dataframe y definir grupos
+targets <- as.data.frame(targets)
+groups <- as.factor(targets$Phenotype)
+
+# Crear el diseño del modelo
+designMat <- model.matrix(~ -1 + groups)
+print(designMat)
+```
+
+Como se ha comentado en la introducción, hay una réplica de cada muestra, por ello, se utilizará la librería duplicateCorrelation con el objetivo de manejar adecuadamente estas réplicas.
+
+```{r}
+# Calcular la correlación entre réplicas técnicas
+dupcor <- duplicateCorrelation(abundancias, designMat, block=targets$Individual)
+print(dupcor$consensus.correlation)
+```
+
+```{r}
+# Crear la matriz de contraste para comparar PD y MSS
+contMat <- makeContrasts(mainEff = groupsPD - groupsMSS, levels = designMat)
+print(contMat)
+```
+
+
+```{r}
+# Ajuste del modelo con lmFit usando la correlación de réplicas
+fit <- lmFit(abundancias, designMat, block = targets$Individual, correlation = dupcor$consensus)
+fit2 <- contrasts.fit(fit, contMat)
+fit2 <- eBayes(fit2)
+
+# Obtener los resultados en formato de dataframe 
+results_df <- data.frame(
+  logFC = fit2$coef[, "mainEff"],           # Cambio de expresión log2 fold change
+  P.Value = fit2$p.value[, "mainEff"],      # Valor p
+  adj.P.Val = p.adjust(fit2$p.value[, "mainEff"], method = "BH")  # Valor p ajustado
 )
+
+# Añadir una columna de significancia para resaltar los puntos en el Volcano Plot
+results_df <- results_df %>%
+  mutate(significant = ifelse(adj.P.Val < 0.05 & abs(logFC) > 1, "Significant", "Not Significant"))
+
+# Crear el Volcano Plot personalizado con ggplot2
+ggplot(results_df, aes(x = logFC, y = -log10(P.Value), color = significant)) +
+  geom_point(alpha = 0.8) +
+  scale_color_manual(values = c("Significant" = "red", "Not Significant" = "gray")) +
+  labs(title = "Volcano Plot de Expresión Diferencial",
+       x = "Log2 Fold Change",
+       y = "-Log10 P-Value") +
+  theme_minimal()
 ```
+ 
+ 
+
+Como se puede apreciar en el VolcanoPlot no se observan diferencias significativas entre grupos, pero esto puede deberse a a alta variabilidad, tamaño pequeño de muestra y a las similitudes que presentan ambos grupos. Por ello, a continuación, se van a aplicar técnicas de normalización y escalado para reducir la dispersión y ser capaz de detectar diferencias relevantes.
+
+En primer lugar, se va a aplicar la función *normalizeQuantiles* que ajusta las distribuciones en todas las muestras para que sean i´denticas, posteriormente se aplicará *log2* para reducir la varianza y finalmente, se escalarán los datos para que tengan media cero y desviación estándar uno.
 
 
 ```{r}
-# Mostrar data_negative_mode
-data_negative_mode
-```
+# Paso 1: Aplicar normalización de cuantiles
+abundancias_norm <- normalizeQuantiles(abundancias)
 
-```{r}
-# Mostrar data_positive_mode
-data_positive_mode
-```
-Como se puede apreciar, tanto el dataset data_negative_mode como el data_positive_mode ya tienen el formato SummarizedExperiment por lo que a continuación, se combinarán ambos conjuntos en un único objeto SummarizedData y se le agregará la información del experimento en metadata.
+# Paso 2: Aplicar transformación logarítmica para estabilizar la varianza
+abundancias_norm_log <- log2(abundancias_norm + 1) 
 
+# Paso 3: Escalado Z-score (escalado por fila) para cada fosfopéptido
+abundancias_final <- t(apply(abundancias_norm_log, 1, scale))
 
-```{r}
-# URL de la página que contiene los identificadores de los metabolitos
-metaboliteNamesURL <- "https://www.metabolomicsworkbench.org/data/show_metabolites_by_study.php?STUDY_ID=ST000291&SEARCH_TYPE=KNOWN&STUDY_TYPE=MS&RESULT_TYPE=1"
+# Definir los grupos y el diseño del modelo
+targets <- as.data.frame(targets)
+groups <- as.factor(targets$Phenotype)
+designMat <- model.matrix(~ -1 + groups)
 
-# Leer el contenido HTML de la página y seleccionar elementos de tabla con la clase .datatable
-metaboliteNames <- metaboliteNamesURL %>% 
-  read_html() %>%                   
-  html_nodes(".datatable")          
+# Calcular la correlación entre réplicas técnicas
+dupcor <- duplicateCorrelation(abundancias_final, designMat, block = targets$Individual)
 
-# Extraer y procesar la tabla de metabolitos negativos
-metaboliteNames_negative <- metaboliteNames %>%
-  .[[1]] %>%                        
-  html_table() %>%                   
-  dplyr::select(`Metabolite Name`, PubChemCompound_ID, `Kegg Id`) 
+# Crear la matriz de contraste para comparar PD y MSS
+contMat <- makeContrasts(mainEff = groupsPD - groupsMSS, levels = designMat)
 
-# Extraer y procesar la tabla de metabolitos positivos
-metaboliteNames_positive <- metaboliteNames %>%
-  .[[2]] %>%                         
-  html_table() %>%                   
-  dplyr::select(`Metabolite Name`, PubChemCompound_ID, `Kegg Id`)  
+# Ajuste del modelo con los datos normalizados y transformados
+fit <- lmFit(abundancias_final, designMat, block = targets$Individual, correlation = dupcor$consensus)
+fit2 <- contrasts.fit(fit, contMat)
+fit2 <- eBayes(fit2)
 
-# Combinar las tablas y eliminar duplicados
-metaboliteNames <- bind_rows(metaboliteNames_negative, metaboliteNames_positive) %>%
-  dplyr::rename(names = 1, PubChem = 2, KEGG = 3) %>%
-  mutate(KEGG = ifelse(KEGG == "-", "UNKNOWN", KEGG),
-         PubChem = ifelse(PubChem == "-", "UNKNOWN", PubChem)) %>%
-  filter(!duplicated(PubChem))
-```
-
-
-```{r}
-# Preparación de las características en modo negativo
-features_negative <- assay(data_negative_mode) %>% 
-  dplyr::slice(-n())  
-rownames(features_negative) <- rowData(data_negative_mode)$metabolite[1:(length(rowData(data_negative_mode)$metabolite)-1)]
-
-
-# Preparación de las características (features) en modo positivo
-features_positive <- assay(data_positive_mode) %>%  
-  dplyr::slice(-n()) 
-rownames(features_positive) <- rowData(data_positive_mode)$metabolite[1:(length(rowData(data_positive_mode)$metabolite)-1)]
-
-
-# Combinar características de modo positivo y negativo, y asignar los IDs de PubChem
-features <- bind_rows(features_negative, features_positive) %>% 
-  tibble::rownames_to_column("names") %>%  
-  right_join(metaboliteNames, by = "names") %>%
-  select(-names, -KEGG) %>% 
-  tibble::column_to_rownames("PubChem")  
-
-# Preparación de los metadatos de las muestras
-pdata <- colData(data_negative_mode) %>%  
-  as.data.frame() %>% 
-  tibble::rownames_to_column("ID") %>% 
-  mutate(Treatment = case_when(Treatment == "Baseline urine" ~ "Baseline",  
-                               Treatment == "Urine after drinking apple juice" ~ "Apple",
-                               Treatment == "Urine after drinking cranberry juice" ~ "Cranberry"))
-```
-
-
-
-
-```{r}
-common_metabolites <- intersect(rownames(features_negative), rownames(features_positive))
-# Filtrar features_negative y features_positive para mantener solo los metabolitos comunes
-features_negative <- features_negative[common_metabolites, ]
-features_positive <- features_positive[common_metabolites, ]
-# Crear el objeto SummarizedExperiment combinado
-combined_data <- SummarizedExperiment(
-  assays = list(
-    negative_mode = features_negative,  # Datos en modo negativo
-    positive_mode = features_positive   # Datos en modo positivo
-  ),
-  colData = pdata,                      # Metadatos de las muestras
-  rowData = rowData(data_negative_mode) # Información de los metabolitos (nombres e IDs)
+# Extraer los resultados en formato de dataframe para ggplot2
+results_df <- data.frame(
+  logFC = fit2$coef[, "mainEff"],
+  P.Value = fit2$p.value[, "mainEff"],
+  adj.P.Val = p.adjust(fit2$p.value[, "mainEff"], method = "BH")
 )
 
-# Agregar la información del experimento a metadata
-metadata(combined_data)$experimentData <- MIAME(
-  title = "LC-MS Based Approaches to Investigate Metabolomic Differences in the Urine of Young Women after Drinking Cranberry Juice or Apple Juice",
-  lab = "Duke University",
-  name = "Pol Castellano-Escuder",
-  url = "https://www.metabolomicsworkbench.org/data/DRCCMetadata.php?Mode=Study&StudyID=ST000291"
-)
+# Añadir una columna de significancia para el Volcano Plot
+results_df <- results_df %>%
+  mutate(significant = ifelse(adj.P.Val < 0.05 & abs(logFC) > 1, "Significant", "Not Significant"))
 
-# Mostrar el objeto combinado
-combined_data
+# Crear y visualizar el Volcano Plot con ggplot2
+ggplot(results_df, aes(x = logFC, y = -log10(P.Value), color = significant)) +
+  geom_point(alpha = 0.8) +
+  scale_color_manual(values = c("Significant" = "red", "Not Significant" = "gray")) +
+  labs(title = "Volcano Plot de Expresión Diferencial",
+       x = "Log2 Fold Change",
+       y = "-Log10 P-Value") +
+  theme_minimal()
 
+
+
+```
+
+
+Como se puede apreciar en el gráfico, se ha reducido la variabilidad considerablente, sin embargo, siguen sin detectarse diferencias significativas entre los grupos. Esto puede deberse a la similitud biológica en términos de fosfopéptidos de ambos grupos.
+
+
+
+
+
+
+
+# Exportación de Archivos
+
+
+```{r}
+# Guardar el objeto SummarizedExperiment como .RDS
+saveRDS(se, file = "summarize_data/summarized_experiment.rds")
+
+# Guardar el objeto en formato .RData
+save(se, file = "summarize_data/summarized_experiment.RData")
+```
+
+
+```{r}
+# Guardar los datos en forma de texto
+# Exportar la matriz de datos de abundancia
+write.csv(as.data.frame(assay(se, "counts")), "datos_texto/abundancias.csv", row.names = TRUE)
+
+# Exportar los metadatos de las muestras
+write.csv(as.data.frame(colData(se)), "datos_texto/sample_info.csv", row.names = TRUE)
+
+# Exportar los metadatos de los fosfopéptidos
+write.csv(as.data.frame(rowData(se)), "datos_texto/row_info.csv", row.names = TRUE)
+```
+
+
+
+# Repositorio de Github
+
+A continuación se muestra los comandos utilizados para crear el repositorio Github:
+
+-   En primer lugar, se crea el repositorio en mi cuenta de Github y lo llamamos Manzano-Reche-Gabriel-PEC1
+
+```{r, eval=FALSE}
+# Iniciar Git en local
+git init
+
+# Añadir archivos presentes en el path
+system("git add .")
+
+# Realizar un commmit
+system('git command -m "Mensaje"')
+
+# Conectar repositorio local con el repositorio de GitHub
+system("git remote add origin https://github.com/GabriManz/Manzano-Reche-Gabriel-PEC1")
+
+# Subir los cambios al repositorio de GitHub
+system("git push origin main")
+```
+
+
+
+El repositorio de Github se encuentra en el siguiente enlace:
+
+-   https://github.com/GabriManz/Manzano-Reche-Gabriel-PEC1
+
+Este repositorio presenta la siguiente estructura:
+
+```{r, eval=FALSE}
+Manzano-Reche-Gabriel-PEC1/
+├── data/                       
+│   ├── abundancias.csv          
+│   ├── sample_info.csv         
+│   └── row_info.csv            
+├── summarized_data/            
+│   ├── summarized_experiment.rds   
+│   └── summarized_experiment.RData 
+├── README.md                   
+├── Manzano-Reche-Gabriel-PEC1.Rmd 
+├── Manzano-Reche-Gabriel-PEC1.html
+├── Manzano-Reche-Gabriel-PEC1.pdf
+├── Manzano-Reche-Gabriel-PEC1.R
+└── .gitignore                  
 ```
