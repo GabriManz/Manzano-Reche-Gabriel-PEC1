@@ -1,5 +1,5 @@
 ---
-title: "PEC 1: Informe Análisis de datos de Fosfoptoteómica"
+title: "PEC 1: Informe Análisis de datos de Fosfoproteómica"
 author: "Gabriel Manzano Reche"
 date: '*`r format(Sys.Date(),"%d de %B de %Y")`*'
 lang: "es"
