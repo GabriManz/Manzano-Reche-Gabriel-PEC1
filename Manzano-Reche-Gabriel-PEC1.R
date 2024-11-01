@@ -1,5 +1,8 @@
-# Librerías
-library(ggplot2)
+if (!(require(limma))){
+  source("http://bioconductor.org/biocLite.R")
+  biocLite("limma")
+}
+
 library(SummarizedExperiment)
 library(readxl)
 library(tidyverse)
@@ -8,18 +11,18 @@ library(tidyverse)
 original_data <- read_excel("TIO2+PTYR-human-MSS+MSIvsPD.XLSX")
 head(original_data)
 
-# Nombres de las columnas
-colnames(original_data)
-
-# Carga de los datos de la hoja 2
+# Carga de los datos de la hoja 1
 targets <- read_excel("TIO2+PTYR-human-MSS+MSIvsPD.XLSX", sheet = 2)
 head(targets)
+
+# Nombres de las columnas
+colnames(original_data)
 
 # Seleccionar las columnas de abundancia y almacenarlas en una variable
 abundancias <- original_data %>% select(5:16)
 abundancias <- as.data.frame(abundancias)
 
-# Asignarle nuevos nombres a las filas de la matriz de abundancia
+# Asignarle nuevos nombres a las columnas de la matriz de abundancia
 accesion_rownames <- make.names(original_data$Accession, unique = TRUE)
 rownames(abundancias) <- accesion_rownames
 head(abundancias)
@@ -49,13 +52,13 @@ se <- SummarizedExperiment(
 summary(assay(se, "counts"))
 
 # Convertir los datos de abundancia a formato largo
-abundances_long <- abundancias %>% 
+abundancias_long <- abundancias %>% 
   pivot_longer(cols = everything(), names_to = "Muestra", values_to = "Abundancia")
 
 # Crear el histograma para cada muestra
-ggplot(abundances_long, aes(x = Abundancia)) +
+ggplot(abundancias_long, aes(x = Abundancia)) +
   geom_histogram(bins = 20, fill = "red", color = "black") +
-  facet_wrap(~ Muestra, scales = "free_x") +  # Crear un gráfico por cada muestra
+  facet_wrap(~ Muestra, scales = "free_x") +  
   labs(title = "Distribución de abundancias en cada muestra",
        x = "Abundancia",
        y = "Frecuencia") +
@@ -70,24 +73,90 @@ boxplot(log10(assay(se, "counts") + 1),
         col = "lightblue",  
         border = "darkblue")  
 
+# Extraer la matriz de abundancia del objeto SummarizedExperiment
+abundancias <- assay(se, "counts")
+
+# Convertir la matriz de abundancia a formato largo y aplicar transformación logarítmica
+logDat <- as.data.frame(abundancias) %>%
+  pivot_longer(cols = everything(), names_to = "Muestra", values_to = "Abundancia") %>%
+  mutate(log_abundance = log10(Abundancia + 1))
+
+# Extraer información de Grupo y Réplica desde el nombre de la muestra
+covs <- str_split(logDat$Muestra, "_", simplify = TRUE)
+colnames(covs) <- c("Sample", "Replicate", "Group")
+
+# Añadir las nuevas columnas (Sample, Replicate, Group) al dataframe logDat
+logDat2 <- cbind(logDat, covs)
+
+# Crear el boxplot con ggplot2 usando el grupo y la réplica como variables estéticas
+ggplot(logDat2, aes(x = Muestra, y = log_abundance, fill = Group, colour = Replicate)) + 
+  geom_boxplot() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = "Distribución de abundancias de fosfopéptidos (escala log10)",
+       x = "Muestras",
+       y = "Log10(Abundancia + 1)")
+
 # Análisis de Componentes Principales
 source("https://raw.githubusercontent.com/uebvhir/UEB_PCA/master/UEB_plotPCA3.R")
 plotPCA3(datos=as.matrix(log10(abundancias+1)), labels=colnames(abundancias), 
          factor=targets$Phenotype, title ="Phosphoproteomic data",
          scale=FALSE, colores=1:2, size = 3.5, glineas = 2.5)
 
+# Convertir el archivo de targets a dataframe y definir grupos
+targets <- as.data.frame(targets)
+groups <- as.factor(targets$Phenotype)
+
+# Crear el diseño del modelo
+designMat <- model.matrix(~ -1 + groups)
+print(designMat)
+
+# Calcular la correlación entre réplicas técnicas
+dupcor <- duplicateCorrelation(abundancias, designMat, block=targets$Individual)
+print(dupcor$consensus.correlation)
+
+# Crear la matriz de contraste para comparar PD y MSS
+contMat <- makeContrasts(mainEff = groupsPD - groupsMSS, levels = designMat)
+print(contMat)
+
+# Ajuste del modelo con lmFit usando la correlación de réplicas
+fit <- lmFit(abundancias, designMat, block = targets$Individual, correlation = dupcor$consensus)
+fit2 <- contrasts.fit(fit, contMat)
+fit2 <- eBayes(fit2)
+
+# Obtener los resultados en formato de dataframe 
+results_df <- data.frame(
+  logFC = fit2$coef[, "mainEff"],           
+  P.Value = fit2$p.value[, "mainEff"],      
+  adj.P.Val = p.adjust(fit2$p.value[, "mainEff"], method = "BH")  
+)
+
+# Añadir una columna de significancia para resaltar los puntos en el Volcano Plot
+results_df <- results_df %>%
+  mutate(significant = ifelse(adj.P.Val < 0.05 & abs(logFC) > 1, "Significant", "Not Significant"))
+
+# Crear el Volcano Plot personalizado con ggplot2
+ggplot(results_df, aes(x = logFC, y = -log10(P.Value), color = significant)) +
+  geom_point(alpha = 0.8) +
+  scale_color_manual(values = c("Significant" = "red", "Not Significant" = "gray")) +
+  labs(title = "Volcano Plot de Expresión Diferencial",
+       x = "Log2 Fold Change",
+       y = "-Log10 P-Value") +
+  theme_minimal()
+
 # Guardar el objeto SummarizedExperiment como .RDS
-saveRDS(se, file = "summarized_data/summarized_experiment.rds")
+saveRDS(se, file = "summarize_data/summarized_experiment.rds")
 
 # Guardar el objeto en formato .RData
-save(se, file = "summarized_data/summarized_experiment.RData")
+save(se, file = "summarize_data/summarized_experiment.RData")
 
 # Guardar los datos en forma de texto
 # Exportar la matriz de datos de abundancia
-write.csv(as.data.frame(assay(se, "counts")), "datos_texto/abundances.csv", row.names = TRUE)
+write.csv(as.data.frame(assay(se, "counts")), "datos_texto/abundancias.csv", row.names = TRUE)
 
 # Exportar los metadatos de las muestras
 write.csv(as.data.frame(colData(se)), "datos_texto/sample_info.csv", row.names = TRUE)
 
 # Exportar los metadatos de los fosfopéptidos
 write.csv(as.data.frame(rowData(se)), "datos_texto/row_info.csv", row.names = TRUE)
+
+

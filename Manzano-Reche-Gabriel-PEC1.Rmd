@@ -267,9 +267,9 @@ fit2 <- eBayes(fit2)
 
 # Obtener los resultados en formato de dataframe 
 results_df <- data.frame(
-  logFC = fit2$coef[, "mainEff"],           # Cambio de expresión log2 fold change
-  P.Value = fit2$p.value[, "mainEff"],      # Valor p
-  adj.P.Val = p.adjust(fit2$p.value[, "mainEff"], method = "BH")  # Valor p ajustado
+  logFC = fit2$coef[, "mainEff"],           
+  P.Value = fit2$p.value[, "mainEff"],      
+  adj.P.Val = p.adjust(fit2$p.value[, "mainEff"], method = "BH")  
 )
 
 # Añadir una columna de significancia para resaltar los puntos en el Volcano Plot
