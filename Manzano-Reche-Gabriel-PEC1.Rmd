@@ -14,7 +14,7 @@ output:
 
 # 1. Introducción 
 
-Para esta PEC1 se ha escogido el dataset propuesto llamado **2018-Phosphoproteomics**. 
+Para esta PEC1 se ha escogido el dataset propuesto llamado **2018-Phosphoproteomics**, el cuál se ha descargado del repositorio proporcionado en el enunciado.
 
 Los daros de este estudio se han obtenido a partir de un experimento de fosfoproteómica. El experimento ha analizado (3 + 3) modelos PDX de dos subtipos diferentes utilizando muestras enriquecidas en fosfopéptidos. Se realizó un análisis LC-MS con 2 réplicas técnicas para cada muestra. El conjunto de resultados consiste en abundancias normalizadas de señales MS para aproximadamente 1400 fosfopéptidos. El objetivo del análisis es identificar fosfopéptidos que permitan diferenciar los dos grupos de tumores. Esto debe realizarse mediante análisis estadístico y visualización. Los datos se han proporcionado en un archivo de Excel: TIO2+PTYR-human-MSS+MSIvsPD.XLSX.
 
@@ -35,7 +35,7 @@ Cada muestra cuenta con dos réplicas técnicas. La primera columna, SequenceMod
 
 -   Tamaño de muestra reducido. Sólo se disponen de tres muestras con dos réplicas cada una para cada subtipo.
 -   La propia limitación de la técnica LC-MS: esta técnica puede no capturar todos los fosfopéptidos presentes.
--   Los modelos PDX pueden presentan variabilidad biológica, lo que puede influir en los resultados.
+-   Los modelos pueden presentar variabilidad biológica, lo que puede influir en los resultados.
 
 
 # 2. Carga de los datos
@@ -85,7 +85,7 @@ rownames(abundancias) <- accesion_rownames
 head(abundancias)
 ```
 
-A continuación se definen los metadatos, que incluyen información de las muestras como grupo y réplica, y detalles de los fosfopéptidos como modificaciones de secuencia y descripción.
+A continuación, se definen los metadatos, que incluyen información de las muestras como grupo y réplica, y detalles de los fosfopéptidos como modificaciones de secuencia y descripción.
 
 En primer lugar, se definen los metadatos de las muestras que se almacenarán en la variable sample_info. Esta variable contiene el SampleID de cada muestra, el grupo y el número de réplica.
 
@@ -99,7 +99,7 @@ sample_info <- DataFrame(
 ```
 
 
-A continuación se definen los metadatos de los fosfopéptidos, una descripción de estos y la modificacion en su secuencia.
+A continuación se definen los metadatos de los fosfopéptidos, una descripción de estos y la modificación en su secuencia.
 
 
 ```{r}
@@ -128,6 +128,7 @@ se <- SummarizedExperiment(
 
 se
 ```
+
 # 4. Análisis de los datos
 
 A continuación, se procederá al análisis de los datos con el objetivo de identificar diferencias significativas entre los dos subtipos de muestras presentes en el experimento.
@@ -147,14 +148,14 @@ abundancias_long <- abundancias %>%
 # Crear el histograma para cada muestra
 ggplot(abundancias_long, aes(x = Abundancia)) +
   geom_histogram(bins = 20, fill = "red", color = "black") +
-  facet_wrap(~ Muestra, scales = "free_x") +  # Crear un gráfico por cada muestra
+  facet_wrap(~ Muestra, scales = "free_x") +  
   labs(title = "Distribución de abundancias en cada muestra",
        x = "Abundancia",
        y = "Frecuencia") +
   theme_minimal()
 ```
 
-Como se puede apreciar en los histogramas de arriba, todas las muestras están sesgadas hacia la izquierda. Esto sugiere que puede ser útil normalizar los datos (aplicando log10) para visualizar mejor las diferencias entre las muestras. A continuación se viualizarán las datos normalizados en base 10
+Como se puede apreciar en los histogramas de arriba, todas las muestras están sesgadas hacia la izquierda. Esto sugiere que puede ser útil normalizar los datos (aplicando log10) para visualizar mejor las diferencias entre las muestras. A continuación, se viualizarán las datos normalizados en base 10
 
 
 
@@ -164,10 +165,9 @@ boxplot(log10(assay(se, "counts") + 1),
         main = "Distribución de abundancias en escala log10",
         xlab = "Muestras",
         ylab = "Log10(Abundancia + 1)",
-        las = 2,  # Gira las etiquetas del eje x para facilitar la lectura
-        col = "lightblue",  # Color de las cajas
-        border = "darkblue")  # Color del borde
-
+        las = 2,  
+        col = "lightblue",  
+        border = "darkblue")  
 ```
 
 En este gráfico se puede observar la distribución de las abundacias de péptidos en las muestras en escala logarítmica, donde no se observa una separación clara entre las muestras de los grupos MSS y PD.
@@ -232,7 +232,7 @@ Se puede apreciar una clara separación entre los grupos MSS y PD, lo que indica
 
 Se usará el paquete *Lima* para llevar a cabo un análisis de expresión diferencial.
 
-Para ello, en primer ligar se crea la matriz de diseño, en la que a cada muestra se le aplica un 1 y un 0, dependiendo de si está presente o no en los grupos definidos.
+Para ello, en primer lugar, se crea la matriz de diseño, en la que a cada muestra se le aplica un 1 y un 0, dependiendo de si está presente o no en los grupos definidos.
 
 ```{r}
 # Convertir el archivo de targets a dataframe y definir grupos
@@ -288,63 +288,9 @@ ggplot(results_df, aes(x = logFC, y = -log10(P.Value), color = significant)) +
  
  
 
-Como se puede apreciar en el VolcanoPlot no se observan diferencias significativas entre grupos, pero esto puede deberse a a alta variabilidad, tamaño pequeño de muestra y a las similitudes que presentan ambos grupos. Por ello, a continuación, se van a aplicar técnicas de normalización y escalado para reducir la dispersión y ser capaz de detectar diferencias relevantes.
-
-En primer lugar, se va a aplicar la función *normalizeQuantiles* que ajusta las distribuciones en todas las muestras para que sean i´denticas, posteriormente se aplicará *log2* para reducir la varianza y finalmente, se escalarán los datos para que tengan media cero y desviación estándar uno.
+Como se puede apreciar en el VolcanoPlot no se observan diferencias significativas entre grupos, pero esto puede deberse a a alta variabilidad, tamaño pequeño de muestra y a las similitudes que presentan ambos grupos. La variabilidad observada en el PCA puede no deberse a diferencias significativas entre los fosfopéptidos.
 
 
-```{r}
-# Paso 1: Aplicar normalización de cuantiles
-abundancias_norm <- normalizeQuantiles(abundancias)
-
-# Paso 2: Aplicar transformación logarítmica para estabilizar la varianza
-abundancias_norm_log <- log2(abundancias_norm + 1) 
-
-# Paso 3: Escalado Z-score (escalado por fila) para cada fosfopéptido
-abundancias_final <- t(apply(abundancias_norm_log, 1, scale))
-
-# Definir los grupos y el diseño del modelo
-targets <- as.data.frame(targets)
-groups <- as.factor(targets$Phenotype)
-designMat <- model.matrix(~ -1 + groups)
-
-# Calcular la correlación entre réplicas técnicas
-dupcor <- duplicateCorrelation(abundancias_final, designMat, block = targets$Individual)
-
-# Crear la matriz de contraste para comparar PD y MSS
-contMat <- makeContrasts(mainEff = groupsPD - groupsMSS, levels = designMat)
-
-# Ajuste del modelo con los datos normalizados y transformados
-fit <- lmFit(abundancias_final, designMat, block = targets$Individual, correlation = dupcor$consensus)
-fit2 <- contrasts.fit(fit, contMat)
-fit2 <- eBayes(fit2)
-
-# Extraer los resultados en formato de dataframe para ggplot2
-results_df <- data.frame(
-  logFC = fit2$coef[, "mainEff"],
-  P.Value = fit2$p.value[, "mainEff"],
-  adj.P.Val = p.adjust(fit2$p.value[, "mainEff"], method = "BH")
-)
-
-# Añadir una columna de significancia para el Volcano Plot
-results_df <- results_df %>%
-  mutate(significant = ifelse(adj.P.Val < 0.05 & abs(logFC) > 1, "Significant", "Not Significant"))
-
-# Crear y visualizar el Volcano Plot con ggplot2
-ggplot(results_df, aes(x = logFC, y = -log10(P.Value), color = significant)) +
-  geom_point(alpha = 0.8) +
-  scale_color_manual(values = c("Significant" = "red", "Not Significant" = "gray")) +
-  labs(title = "Volcano Plot de Expresión Diferencial",
-       x = "Log2 Fold Change",
-       y = "-Log10 P-Value") +
-  theme_minimal()
-
-
-
-```
-
-
-Como se puede apreciar en el gráfico, se ha reducido la variabilidad considerablente, sin embargo, siguen sin detectarse diferencias significativas entre los grupos. Esto puede deberse a la similitud biológica en términos de fosfopéptidos de ambos grupos.
 
 
 
