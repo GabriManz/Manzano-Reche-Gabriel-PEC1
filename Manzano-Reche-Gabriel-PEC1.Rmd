@@ -1,12 +1,13 @@
 ---
-title: "PEC 1: Informe de Análisis Metabolómico de orina en mujeres después de beber zumo de arándano o manzana"
+title: "PEC 1: Informe Análisis de datos de Fosfoptoteómica"
 author: "Gabriel Manzano Reche"
 date: '*`r format(Sys.Date(),"%d de %B de %Y")`*'
-lan: "es"
+lang: "es"
 output:
-  html_document:
-    toc: true
   pdf_document:
+    toc: true
+    latex_engine: xelatex
+  html_document:
     toc: true
 ---
 
