@@ -102,46 +102,31 @@ plotPCA3(datos=as.matrix(log10(abundancias+1)), labels=colnames(abundancias),
          factor=targets$Phenotype, title ="Phosphoproteomic data",
          scale=FALSE, colores=1:2, size = 3.5, glineas = 2.5)
 
-# Convertir el archivo de targets a dataframe y definir grupos
-targets <- as.data.frame(targets)
-groups <- as.factor(targets$Phenotype)
+# Definir grupos como factor y crear matriz de diseño
+targets <- as.data.frame(targets)  # Asegúrate de que 'targets' esté correctamente cargado
+groups <- as.factor(targets$Phenotype)  # Ajusta 'Phenotype' según la columna que contiene los grupos MSS y PD
 
-# Crear el diseño del modelo
+# Crear la matriz de diseño para Limma
 designMat <- model.matrix(~ -1 + groups)
 print(designMat)
 
-# Calcular la correlación entre réplicas técnicas
+# Calcular la correlación media entre réplicas técnicas
+if (!require(statmod)) install.packages("statmod")
 dupcor <- duplicateCorrelation(abundancias, designMat, block=targets$Individual)
 print(dupcor$consensus.correlation)
 
 # Crear la matriz de contraste para comparar PD y MSS
 contMat <- makeContrasts(mainEff = groupsPD - groupsMSS, levels = designMat)
-print(contMat)
+show(contMat)
 
-# Ajuste del modelo con lmFit usando la correlación de réplicas
-fit <- lmFit(abundancias, designMat, block = targets$Individual, correlation = dupcor$consensus)
+fit <- lmFit(abundancias, designMat, block=targets$Individual, correlation=dupcor$consensus)
 fit2 <- contrasts.fit(fit, contMat)
 fit2 <- eBayes(fit2)
+results <- topTableF(fit2, adjust="BH", number=nrow(abundancias))
+head(results)
 
-# Obtener los resultados en formato de dataframe 
-results_df <- data.frame(
-  logFC = fit2$coef[, "mainEff"],           
-  P.Value = fit2$p.value[, "mainEff"],      
-  adj.P.Val = p.adjust(fit2$p.value[, "mainEff"], method = "BH")  
-)
-
-# Añadir una columna de significancia para resaltar los puntos en el Volcano Plot
-results_df <- results_df %>%
-  mutate(significant = ifelse(adj.P.Val < 0.05 & abs(logFC) > 1, "Significant", "Not Significant"))
-
-# Crear el Volcano Plot personalizado con ggplot2
-ggplot(results_df, aes(x = logFC, y = -log10(P.Value), color = significant)) +
-  geom_point(alpha = 0.8) +
-  scale_color_manual(values = c("Significant" = "red", "Not Significant" = "gray")) +
-  labs(title = "Volcano Plot de Expresión Diferencial",
-       x = "Log2 Fold Change",
-       y = "-Log10 P-Value") +
-  theme_minimal()
+# Graficar el Volcano Plot
+volcanoplot(fit2, highlight=10, names=rownames(abundancias), cex=0.75, xlim=c(-1e+06, 1e+06))
 
 # Guardar el objeto SummarizedExperiment como .RDS
 saveRDS(se, file = "summarize_data/summarized_experiment.rds")

@@ -236,55 +236,42 @@ Se usará el paquete *Lima* para llevar a cabo un análisis de expresión difere
 Para ello, en primer lugar, se crea la matriz de diseño, en la que a cada muestra se le aplica un 1 y un 0, dependiendo de si está presente o no en los grupos definidos.
 
 ```{r}
-# Convertir el archivo de targets a dataframe y definir grupos
-targets <- as.data.frame(targets)
-groups <- as.factor(targets$Phenotype)
+# Definir grupos como factor y crear matriz de diseño
+targets <- as.data.frame(targets)  # Asegúrate de que 'targets' esté correctamente cargado
+groups <- as.factor(targets$Phenotype)  # Ajusta 'Phenotype' según la columna que contiene los grupos MSS y PD
 
-# Crear el diseño del modelo
+# Crear la matriz de diseño para Limma
 designMat <- model.matrix(~ -1 + groups)
 print(designMat)
 ```
 
-Como se ha comentado en la introducción, hay una réplica de cada muestra, por ello, se utilizará la librería duplicateCorrelation con el objetivo de manejar adecuadamente estas réplicas.
 
 ```{r}
-# Calcular la correlación entre réplicas técnicas
+# Calcular la correlación media entre réplicas técnicas
+if (!require(statmod)) install.packages("statmod")
 dupcor <- duplicateCorrelation(abundancias, designMat, block=targets$Individual)
 print(dupcor$consensus.correlation)
-```
 
-```{r}
 # Crear la matriz de contraste para comparar PD y MSS
 contMat <- makeContrasts(mainEff = groupsPD - groupsMSS, levels = designMat)
-print(contMat)
+show(contMat)
+```
+
+```{r}
+fit <- lmFit(abundancias, designMat, block=targets$Individual, correlation=dupcor$consensus)
+fit2 <- contrasts.fit(fit, contMat)
+fit2 <- eBayes(fit2)
+results <- topTableF(fit2, adjust="BH", number=nrow(abundancias))
+head(results)
+
+# Graficar el Volcano Plot
+volcanoplot(fit2, highlight=10, names=rownames(abundancias), cex=0.75, xlim=c(-1e+06, 1e+06))
 ```
 
 
 ```{r}
-# Ajuste del modelo con lmFit usando la correlación de réplicas
-fit <- lmFit(abundancias, designMat, block = targets$Individual, correlation = dupcor$consensus)
-fit2 <- contrasts.fit(fit, contMat)
-fit2 <- eBayes(fit2)
-
-# Obtener los resultados en formato de dataframe 
-results_df <- data.frame(
-  logFC = fit2$coef[, "mainEff"],           
-  P.Value = fit2$p.value[, "mainEff"],      
-  adj.P.Val = p.adjust(fit2$p.value[, "mainEff"], method = "BH")  
-)
-
-# Añadir una columna de significancia para resaltar los puntos en el Volcano Plot
-results_df <- results_df %>%
-  mutate(significant = ifelse(adj.P.Val < 0.05 & abs(logFC) > 1, "Significant", "Not Significant"))
-
-# Crear el Volcano Plot personalizado con ggplot2
-ggplot(results_df, aes(x = logFC, y = -log10(P.Value), color = significant)) +
-  geom_point(alpha = 0.8) +
-  scale_color_manual(values = c("Significant" = "red", "Not Significant" = "gray")) +
-  labs(title = "Volcano Plot de Expresión Diferencial",
-       x = "Log2 Fold Change",
-       y = "-Log10 P-Value") +
-  theme_minimal()
+volcanoplot(fit2, highlight=10, names=rownames(abundancias), cex=0.75,
+            xlim=c(-1e+06,1e+06))
 ```
  
  
@@ -323,6 +310,83 @@ write.csv(as.data.frame(colData(se)), "datos_texto/sample_info.csv", row.names =
 write.csv(as.data.frame(rowData(se)), "datos_texto/row_info.csv", row.names = TRUE)
 ```
 
+
+# El proceso de análisis
+
+## Pregunta Biológica
+
+**¿Cuál fue la interrogante clave que motivó este estudio y cuáles son las posibles implicaciones biológicas de explorar las diferencias moleculares en fosfoproteínas entre los subtipos tumorales MSS y PD?**
+
+El interrogante clave que motivó este estudio fue la identificación de los fosfopéptidos que permiten diferenciar entre los dos subtipos tumorales MSS y PD. Para ello, se utilizó un análisis de fosfoproteómica.
+
+EL principal objetivo del estudio es identificar marcadores de fosfopéptidos que distingan los subtipos. Esta capacidad para diferenciar entre subtipos tumorales podría permitir la personalización de tratamientos y en el diagnóstico diferencial.
+
+## Diseño experimental
+
+**¿Cómo se seleccionaron los grupos de muestras (MSS y PD) en este estudio? ¿Qué aspectos del diseño experimental podrían haber influido en la interpretación de los resultados y qué tipo de diseño experimental se utilizó?**
+
+El diseño experimental utilizado en este estudio incluye la comparación de las muestras de dos subtipos tumorales diferentes, cada una con dos réplicas. Las muestras se enriquecieron con fosfopéptidos y se analizaron con espectometría de masas junto con cromarografía líquida (LC-MS).
+
+El diseño incluye:
+
+-   Un diseño comparativo en el que se comparan tres muestras de cada subtipo con dos réplicas cada una.
+-   Replicación técnica para asegurar la fiabilidad de los resultados.
+
+La limitación que presenta este diseño experimental es el tamaño muestral, lo que impide como se puede ver en el análisis con LIMA, detectar diferencias significativas entre los dos subtipos tumorales.Además, en el análisis de PCA, también se observa una elevada variabilidad entre las muestras de PD, lo que puede haber influido también en la obtención de los resultados.
+
+## Obtención de los datos crudos
+
+**¿Cómo podría afectar la elección de la técnica en la obtención de datos específicos de los fosfopéptidos? ¿Cómo podría haber afectado la selección de muestras tumorales de tipos específicos a los resultados?**
+
+Los datos crudos en este experimento se obtuvieron mediante espectometría de masas junto con cromatografía líquida tras el enriquecimiento de las muestras tumorales en fosfopéptidos.
+
+-   Las muestras se sometieron a un análisis de abundancias de fosfopéptidos, tras lo que se generaron los datos a través de LC-MS.
+-   Los datos de abundancia cuentan con 1400 fosfopéptidos que permitan obtener una medida de fosforilación diferencial en los subtipos tumorales.
+-   La técnica LC-MS, tiene la limitación de que pueden no capturar todos los fosfopéptidos presentes en las muestras.
+
+## Control de calidad, preprocesado y normalización
+
+**¿Cuáles son los posibles desafíos relacionados con la calidad de los datos crudos y qué ajustes o preprocesamientos se aplicaron para abordar estos desafíos?**
+
+En este estudio además, se realizan varios pasos de control de calidad y preprocesamiento:
+
+-   Para corregir el sesgo y reducir variabilidad se aplica una transformación logarítmica de los datos de abundancia. Esto facilita visualizar las distribuciones y facilitar la comparación.
+
+La alta variabilidad en las muestras y el sesgo en la distribución de la matriz de abundancias, se solucionó mediante el uso de réplicas técnicas y normalizando.
+
+
+## Análisis estadístico y genes diferencialmente expresados
+
+**¿Cómo se llevó a cabo el análisis estadístico en este estudio y cuáles fueron los criterios utilizados para identificar los fosfopéptidos diferencialmente expresados entre MSS y PD?**
+
+Se llevo a cabo un análisis estadístico utilizando el paquete *Limma*, para identificar fosfopéptidos diferencialmente expresados entre MSS y PD:
+
+-  Se usó la función *duplicateCorrelation*  para manejar las réplicas.
+-   Luego se creó la matriz de contraste para definir la compración principal entre los grupos PD y MSS.
+-   Finalmente, se usó lmFit para ajustar el modelos lineal.
+
+Se identificaron algunos valores de p bajos, pero ninguna alcanzó la significancia estadística (pvalor < 0.05), lo que puede deberse a la variabilidad entre muestras y al tamaño de muestra reducido.
+
+## Análisis de significación biológica
+
+**¿Cómo se interpreta biológicamente la información obtenida en este estudio? ¿Se utilizaron herramientas específicas o bases de datos para asignar significado a los fosfopéptidos diferencialmente expresados?**
+
+Para interpretar biológicamnete los resultados se generó un volcano plot, el cual representa el cambio de expresión frente al efecto estadístico.
+
+Con este gráfico se puede observar visualmente aquellos fosfopéptidos que presentan cambios de expresión significativos entre los dos subtipos tumorales MSS y PD. SIn embargo, la dispersión de los puntos en el gráfica muestras que las muestras presentan una gran variabilidad, lo que impide distinguir marcadores diferenciales.
+
+Sin embargo, este análisis sugiere la posibilidad de aplicar un escalado adicional o técnicas de normalización adicionales para reducir esta variabilidad entre grupos, y así obetener marcadores diferenciales.
+
+## Respuesta a la pregunta biológica
+
+**¿Cuáles son los hallazgos clave del estudio y cómo contribuyen a responder la pregunta biológica planteada inicialmente? ¿Cuáles podrían ser las implicaciones más amplias de estos hallazgos en el contexto de los subtipos tumorales MSS y PD?**
+
+Los hallazgos en este estudio muestran que a pesar que los fosfopéptidos tienden a diferenciarse entre los subtipos tumorales, estas diferencias no son estadísticamente significativas, debido a la elevada variabilidad de los datos y al pequeño tamaño muestral.
+
+- El análisis de PCA muestra que las muestras MSS están más agrupadas mientras que las de PD presentan una mayor dispersión.
+- El volcano plot muestra una dispersión amplia de los puntos lo que sugiere que los datos podrían beneficiarse de técnicas de normalización adicionales.
+
+En conclusión, este estudio no permitió identificar marcadores diferenciales netre MSS y PD.
 
 
 # Repositorio de Github
